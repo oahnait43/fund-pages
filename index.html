@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>基金日报</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+            padding: 16px;
+            max-width: 420px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .title { font-size: 20px; font-weight: 600; }
+        .refresh { font-size: 12px; color: #58a6ff; cursor: pointer; }
+        .card {
+            background: #161b22;
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .rank {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 11px;
+        }
+        .rank.up { background: #238636; color: white; }
+        .rank.down { background: #da3633; color: white; }
+        .info { flex: 1; }
+        .name { font-size: 14px; font-weight: 500; }
+        .code { font-size: 11px; color: #8b949e; }
+        .nav { font-size: 16px; font-weight: 600; }
+        .change {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 13px;
+            min-width: 60px;
+            text-align: center;
+        }
+        .change.up { background: rgba(35, 134, 54, 0.2); color: #3fb950; }
+        .change.down { background: rgba(218, 54, 51, 0.2); color: #f85149; }
+        .change.neu { background: #21262d; color: #8b949e; }
+        .summary {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .stat {
+            background: #161b22;
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-val { font-size: 24px; font-weight: 600; margin-bottom: 2px; }
+        .stat-label { font-size: 11px; color: #8b949e; }
+        .up .stat-val { color: #3fb950; }
+        .down .stat-val { color: #f85149; }
+        .leader { display: flex; gap: 8px; margin-bottom: 16px; }
+        .leader-card {
+            flex: 1;
+            background: #161b22;
+            border-radius: 10px;
+            padding: 12px;
+        }
+        .leader-label { font-size: 11px; color: #8b949e; margin-bottom: 6px; }
+        .leader-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+        .leader-change { font-size: 18px; font-weight: 600; }
+        .leader-change.up { color: #3fb950; }
+        .leader-change.down { color: #f85149; }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #8b949e;
+        }
+        .time { 
+            text-align: center; 
+            color: #8b949e; 
+            font-size: 11px; 
+            margin-top: 16px; 
+            padding: 8px;
+            background: #161b22;
+            border-radius: 8px;
+        }
+        .live { display: inline-block; width: 8px; height: 8px; background: #3fb950; border-radius: 50%; margin-right: 4px; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">📊 基金日报 <span class="live"></span></div>
+        <div class="refresh" onclick="refreshData()">刷新</div>
+    </div>
+    
+    <div id="content">
+        <div class="loading">加载中...</div>
+    </div>
+    
+    <div class="time" id="updateTime"></div>
+    
+    <script>
+        const API_BASE = 'https://fund-api.13524652333.workers.dev';
+        
+        const FUNDS = [
+            { code: '017192', name: '天弘工业有色' },
+            { code: '008705', name: '广发高股息' },
+            { code: '011035', name: '嘉实稀土产业' },
+            { code: '021532', name: '天弘半导体' },
+            { code: '020199', name: '万家双引擎' },
+            { code: '012842', name: '易方达军工LOF' },
+            { code: '013566', name: '华夏军工安全' },
+        ];
+        
+        async function fetchFund(code) {
+            try {
+                const res = await fetch(`${API_BASE}/fund/${code}`);
+                return await res.json();
+            } catch (e) {
+                return null;
+            }
+        }
+        
+        async function refreshData() {
+            const content = document.getElementById('content');
+            content.innerHTML = '<div class="loading">加载中...</div>';
+            
+            const results = [];
+            for (const fund of FUNDS) {
+                const data = await fetchFund(fund.code);
+                if (data && data.nav) {
+                    results.push({ ...fund, nav: data.nav, change: data.change });
+                }
+            }
+            
+            results.sort((a, b) => b.change - a.change);
+            
+            const gains = results.filter(r => r.change > 0);
+            const losses = results.filter(r => r.change < 0);
+            
+            const now = new Date();
+            document.getElementById('updateTime').innerHTML = `<span class="live"></span>最后更新: ${now.toLocaleTimeString()}`;
+            
+            let html = '';
+            
+            html += `<div class="summary">
+                <div class="stat up"><div class="stat-val">${gains.length}</div><div class="stat-label">上涨</div></div>
+                <div class="stat down"><div class="stat-val">${losses.length}</div><div class="stat-label">下跌</div></div>
+            </div>`;
+            
+            if (gains.length > 0) {
+                const top = gains[0];
+                html += `<div class="leader">
+                    <div class="leader-card">
+                        <div class="leader-label">▲ 领涨</div>
+                        <div class="leader-name">${top.name}</div>
+                        <div class="leader-change up">+${top.change.toFixed(2)}%</div>
+                    </div>`;
+            }
+            if (losses.length > 0) {
+                const worst = losses[losses.length - 1];
+                html += `<div class="leader-card">
+                        <div class="leader-label">▼ 领跌</div>
+                        <div class="leader-name">${worst.name}</div>
+                        <div class="leader-change down">${worst.change.toFixed(2)}%</div>
+                    </div></div>`;
+            }
+            
+            results.forEach((r, i) => {
+                const rankClass = r.change > 0 ? 'up' : r.change < 0 ? 'down' : 'neu';
+                const changeClass = r.change > 0 ? 'up' : r.change < 0 ? 'down' : 'neu';
+                const changeSign = r.change > 0 ? '+' : '';
+                html += `<div class="card">
+                    <div class="rank ${rankClass}">${i+1}</div>
+                    <div class="info"><div class="name">${r.name}</div><div class="code">${r.code}</div></div>
+                    <div class="nav">${r.nav.toFixed(3)}</div>
+                    <div class="change ${changeClass}">${changeSign}${r.change.toFixed(2)}%</div>
+                </div>`;
+            });
+            
+            content.innerHTML = html;
+        }
+        
+        // 首次加载
+        refreshData();
+        
+        // 每30秒自动刷新
+        setInterval(refreshData, 30000);
+    </script>
+</body>
+</html>
