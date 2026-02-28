@@ -108,7 +108,17 @@
 <body>
     <div class="header">
         <div class="title">📊 基金日报 <span class="live"></span></div>
-        <div class="refresh" onclick="refreshData()">刷新</div>
+        <div class="actions">
+            <span class="refresh" onclick="refreshData()">刷新</span>
+            <span class="settings" onclick="toggleManageMode()">⚙️</span>
+        </div>
+    </div>
+    
+    <div id="add-fund-area" style="display: none; margin-bottom: 16px;">
+        <div style="display: flex; gap: 8px;">
+            <input type="text" id="new-fund-code" placeholder="输入基金代码 (如 002910)" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9;">
+            <button onclick="addFund()" style="padding: 8px 16px; border-radius: 6px; border: none; background: #238636; color: white; font-weight: 600; cursor: pointer;">添加</button>
+        </div>
     </div>
     
     <div id="content">
@@ -120,7 +130,7 @@
     <script>
         const API_BASE = 'https://fundgz.1234567.com.cn/js';
         
-        const FUNDS = [
+        const DEFAULT_FUNDS = [
             { code: '017192', name: '天弘工业有色' },
             { code: '008705', name: '广发高股息' },
             { code: '011035', name: '嘉实稀土产业' },
@@ -130,6 +140,9 @@
             { code: '013566', name: '华夏军工安全' },
             { code: '002910', name: '易方达供给侧改革' }
         ];
+
+        let FUNDS = JSON.parse(localStorage.getItem('my_funds')) || DEFAULT_FUNDS;
+        let isManageMode = false;
 
         const pendingRequests = {};
         window.jsonpgz = function(data) {
@@ -164,9 +177,66 @@
             });
         }
         
+        function saveFunds() {
+            localStorage.setItem('my_funds', JSON.stringify(FUNDS));
+        }
+
+        function toggleManageMode() {
+            isManageMode = !isManageMode;
+            document.getElementById('add-fund-area').style.display = isManageMode ? 'block' : 'none';
+            refreshData(); // Re-render to show/hide delete buttons
+        }
+
+        async function addFund() {
+            const input = document.getElementById('new-fund-code');
+            const code = input.value.trim();
+            if (!code) return;
+            
+            if (FUNDS.some(f => f.code === code)) {
+                alert('该基金已存在');
+                input.value = '';
+                return;
+            }
+
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = '查询中...';
+            btn.disabled = true;
+
+            const data = await fetchFund(code);
+            if (data) {
+                FUNDS.push({ code: code, name: data.name });
+                saveFunds();
+                input.value = '';
+                refreshData();
+            } else {
+                alert('未找到该基金，请检查代码');
+            }
+            
+            btn.innerText = originalText;
+            btn.disabled = false;
+        }
+
+        function removeFund(code) {
+            if (confirm('确定要删除这个基金吗？')) {
+                FUNDS = FUNDS.filter(f => f.code !== code);
+                saveFunds();
+                refreshData();
+            }
+        }
+
         async function refreshData() {
             const content = document.getElementById('content');
-            content.innerHTML = '<div class="loading">加载中...</div>';
+            if (FUNDS.length === 0) {
+                content.innerHTML = '<div class="loading">暂无关注基金，请点击右上角设置添加</div>';
+                document.getElementById('updateTime').innerHTML = '';
+                return;
+            }
+            
+            // Only show loading if not already showing content (to avoid flickering on auto-refresh)
+            if (!content.querySelector('.card')) {
+                content.innerHTML = '<div class="loading">加载中...</div>';
+            }
             
             const promises = FUNDS.map(async fund => {
                 const data = await fetchFund(fund.code);
@@ -175,12 +245,12 @@
                     const change = parseFloat(data.gszzl || 0);
                     return { ...fund, nav, change };
                 }
-                return null;
+                return { ...fund, nav: 0, change: 0 }; // Fallback for failed requests
             });
 
-            const resultsRaw = await Promise.all(promises);
-            const results = resultsRaw.filter(r => r !== null);
+            const results = await Promise.all(promises);
             
+            // Sort by change descending
             results.sort((a, b) => b.change - a.change);
             
             const gains = results.filter(r => r.change > 0);
@@ -221,11 +291,17 @@
                 const rankClass = r.change > 0 ? 'up' : r.change < 0 ? 'down' : 'neu';
                 const changeClass = r.change > 0 ? 'up' : r.change < 0 ? 'down' : 'neu';
                 const changeSign = r.change > 0 ? '+' : '';
+                
+                const deleteBtn = isManageMode 
+                    ? `<div class="delete-btn" onclick="removeFund('${r.code}')" style="margin-left: 8px; color: #f85149; cursor: pointer; padding: 4px;">✕</div>` 
+                    : '';
+
                 html += `<div class="card">
                     <div class="rank ${rankClass}">${i+1}</div>
                     <div class="info"><div class="name">${r.name}</div><div class="code">${r.code}</div></div>
                     <div class="nav">${r.nav.toFixed(3)}</div>
                     <div class="change ${changeClass}">${changeSign}${r.change.toFixed(2)}%</div>
+                    ${deleteBtn}
                 </div>`;
             });
             
