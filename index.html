@@ -118,7 +118,7 @@
     <div class="time" id="updateTime"></div>
     
     <script>
-        const API_BASE = 'https://fund-api.13524652333.workers.dev';
+        const API_BASE = 'https://fundgz.1234567.com.cn/js';
         
         const FUNDS = [
             { code: '017192', name: '天弘工业有色' },
@@ -128,28 +128,58 @@
             { code: '020199', name: '万家双引擎' },
             { code: '012842', name: '易方达军工LOF' },
             { code: '013566', name: '华夏军工安全' },
+            { code: '002910', name: '易方达供给侧改革' }
         ];
-        
-        async function fetchFund(code) {
-            try {
-                const res = await fetch(`${API_BASE}/fund/${code}`);
-                return await res.json();
-            } catch (e) {
-                return null;
+
+        const pendingRequests = {};
+        window.jsonpgz = function(data) {
+            const code = data.fundcode;
+            if (pendingRequests[code]) {
+                pendingRequests[code].resolve(data);
+                delete pendingRequests[code];
             }
+        };
+        
+        function fetchFund(code) {
+            return new Promise((resolve, reject) => {
+                pendingRequests[code] = { resolve, reject };
+                const script = document.createElement('script');
+                script.src = `${API_BASE}/${code}.js?rt=${Date.now()}`;
+                script.onload = () => {
+                    script.remove();
+                };
+                script.onerror = () => {
+                    delete pendingRequests[code];
+                    script.remove();
+                    resolve(null);
+                };
+                document.body.appendChild(script);
+                
+                setTimeout(() => {
+                    if (pendingRequests[code]) {
+                        delete pendingRequests[code];
+                        resolve(null);
+                    }
+                }, 3000);
+            });
         }
         
         async function refreshData() {
             const content = document.getElementById('content');
             content.innerHTML = '<div class="loading">加载中...</div>';
             
-            const results = [];
-            for (const fund of FUNDS) {
+            const promises = FUNDS.map(async fund => {
                 const data = await fetchFund(fund.code);
-                if (data && data.nav) {
-                    results.push({ ...fund, nav: data.nav, change: data.change });
+                if (data) {
+                    const nav = parseFloat(data.gsz || data.dwjz);
+                    const change = parseFloat(data.gszzl || 0);
+                    return { ...fund, nav, change };
                 }
-            }
+                return null;
+            });
+
+            const resultsRaw = await Promise.all(promises);
+            const results = resultsRaw.filter(r => r !== null);
             
             results.sort((a, b) => b.change - a.change);
             
@@ -166,22 +196,25 @@
                 <div class="stat down"><div class="stat-val">${losses.length}</div><div class="stat-label">下跌</div></div>
             </div>`;
             
-            if (gains.length > 0) {
-                const top = gains[0];
-                html += `<div class="leader">
-                    <div class="leader-card">
+            if (gains.length > 0 || losses.length > 0) {
+                html += `<div class="leader">`;
+                if (gains.length > 0) {
+                    const top = gains[0];
+                    html += `<div class="leader-card">
                         <div class="leader-label">▲ 领涨</div>
                         <div class="leader-name">${top.name}</div>
                         <div class="leader-change up">+${top.change.toFixed(2)}%</div>
                     </div>`;
-            }
-            if (losses.length > 0) {
-                const worst = losses[losses.length - 1];
-                html += `<div class="leader-card">
-                        <div class="leader-label">▼ 领跌</div>
-                        <div class="leader-name">${worst.name}</div>
-                        <div class="leader-change down">${worst.change.toFixed(2)}%</div>
-                    </div></div>`;
+                }
+                if (losses.length > 0) {
+                    const worst = losses[losses.length - 1];
+                    html += `<div class="leader-card">
+                            <div class="leader-label">▼ 领跌</div>
+                            <div class="leader-name">${worst.name}</div>
+                            <div class="leader-change down">${worst.change.toFixed(2)}%</div>
+                        </div>`;
+                }
+                html += `</div>`;
             }
             
             results.forEach((r, i) => {
@@ -199,10 +232,7 @@
             content.innerHTML = html;
         }
         
-        // 首次加载
         refreshData();
-        
-        // 每30秒自动刷新
         setInterval(refreshData, 30000);
     </script>
 </body>
