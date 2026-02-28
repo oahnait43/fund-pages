@@ -75,6 +75,19 @@
         .stat-label { font-size: 11px; color: #8b949e; }
         .up .stat-val { color: #3fb950; }
         .down .stat-val { color: #f85149; }
+        .total-gain {
+            text-align: center;
+            margin-bottom: 16px;
+            padding: 16px;
+            background: #161b22;
+            border-radius: 10px;
+        }
+        .total-gain-val { font-size: 32px; font-weight: 700; }
+        .total-gain-label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+        .total-gain.up .total-gain-val { color: #3fb950; }
+        .total-gain.down .total-gain-val { color: #f85149; }
+        .total-gain.neu .total-gain-val { color: #c9d1d9; }
+        
         .leader { display: flex; gap: 8px; margin-bottom: 16px; }
         .leader-card {
             flex: 1;
@@ -92,6 +105,19 @@
             padding: 40px;
             color: #8b949e;
         }
+        .fund-gain { font-size: 12px; font-weight: 600; margin-top: 4px; }
+        .fund-gain.up { color: #3fb950; }
+        .fund-gain.down { color: #f85149; }
+        .share-edit {
+            margin-left: 8px;
+            font-size: 12px;
+            color: #58a6ff;
+            cursor: pointer;
+            padding: 4px 8px;
+            background: rgba(88, 166, 255, 0.1);
+            border-radius: 6px;
+        }
+
         .time { 
             text-align: center; 
             color: #8b949e; 
@@ -131,17 +157,20 @@
         const API_BASE = 'https://fundgz.1234567.com.cn/js';
         
         const DEFAULT_FUNDS = [
-            { code: '017192', name: '天弘工业有色' },
-            { code: '008705', name: '广发高股息' },
-            { code: '011035', name: '嘉实稀土产业' },
-            { code: '021532', name: '天弘半导体' },
-            { code: '020199', name: '万家双引擎' },
-            { code: '012842', name: '易方达军工LOF' },
-            { code: '013566', name: '华夏军工安全' },
-            { code: '002910', name: '易方达供给侧改革' }
+            { code: '017192', name: '天弘工业有色', share: 0 },
+            { code: '008705', name: '广发高股息', share: 0 },
+            { code: '011035', name: '嘉实稀土产业', share: 0 },
+            { code: '021532', name: '天弘半导体', share: 0 },
+            { code: '020199', name: '万家双引擎', share: 0 },
+            { code: '012842', name: '易方达军工LOF', share: 0 },
+            { code: '013566', name: '华夏军工安全', share: 0 },
+            { code: '002910', name: '易方达供给侧改革', share: 0 }
         ];
 
         let FUNDS = JSON.parse(localStorage.getItem('my_funds')) || DEFAULT_FUNDS;
+        // Migrate old data (add share field if missing)
+        FUNDS = FUNDS.map(f => ({ share: 0, ...f }));
+        
         let isManageMode = false;
 
         const pendingRequests = {};
@@ -184,7 +213,7 @@
         function toggleManageMode() {
             isManageMode = !isManageMode;
             document.getElementById('add-fund-area').style.display = isManageMode ? 'block' : 'none';
-            refreshData(); // Re-render to show/hide delete buttons
+            refreshData(); 
         }
 
         async function addFund() {
@@ -205,7 +234,7 @@
 
             const data = await fetchFund(code);
             if (data) {
-                FUNDS.push({ code: code, name: data.name });
+                FUNDS.push({ code: code, name: data.name, share: 0 });
                 saveFunds();
                 input.value = '';
                 refreshData();
@@ -225,6 +254,23 @@
             }
         }
 
+        function editShare(code) {
+            const fund = FUNDS.find(f => f.code === code);
+            if (!fund) return;
+            
+            const newShare = prompt(`请输入 ${fund.name} (${code}) 的持有份额:`, fund.share || 0);
+            if (newShare !== null) {
+                const shareNum = parseFloat(newShare);
+                if (!isNaN(shareNum) && shareNum >= 0) {
+                    fund.share = shareNum;
+                    saveFunds();
+                    refreshData();
+                } else {
+                    alert('请输入有效的数字');
+                }
+            }
+        }
+
         async function refreshData() {
             const content = document.getElementById('content');
             if (FUNDS.length === 0) {
@@ -233,7 +279,6 @@
                 return;
             }
             
-            // Only show loading if not already showing content (to avoid flickering on auto-refresh)
             if (!content.querySelector('.card')) {
                 content.innerHTML = '<div class="loading">加载中...</div>';
             }
@@ -242,25 +287,43 @@
                 const data = await fetchFund(fund.code);
                 if (data) {
                     const nav = parseFloat(data.gsz || data.dwjz);
+                    const lastNav = parseFloat(data.dwjz || 0);
                     const change = parseFloat(data.gszzl || 0);
-                    return { ...fund, nav, change };
+                    // Calculate estimated profit: (Est. NAV - Yesterday NAV) * Share
+                    // Or more simply: Yesterday NAV * Share * Change% / 100
+                    // Method 1 (Direct NAV diff): (nav - lastNav) * (fund.share || 0)
+                    // Method 2 (Percentage): (lastNav * (fund.share || 0)) * (change / 100)
+                    // Method 1 is more accurate to the displayed change amount per share
+                    const profit = (nav - lastNav) * (fund.share || 0);
+                    
+                    return { ...fund, nav, change, profit };
                 }
-                return { ...fund, nav: 0, change: 0 }; // Fallback for failed requests
+                return { ...fund, nav: 0, change: 0, profit: 0 }; 
             });
 
             const results = await Promise.all(promises);
             
-            // Sort by change descending
             results.sort((a, b) => b.change - a.change);
             
             const gains = results.filter(r => r.change > 0);
             const losses = results.filter(r => r.change < 0);
+            const totalProfit = results.reduce((sum, r) => sum + r.profit, 0);
             
             const now = new Date();
             document.getElementById('updateTime').innerHTML = `<span class="live"></span>最后更新: ${now.toLocaleTimeString()}`;
             
             let html = '';
             
+            // Total Profit Display
+            const totalClass = totalProfit > 0 ? 'up' : totalProfit < 0 ? 'down' : 'neu';
+            const totalSign = totalProfit > 0 ? '+' : '';
+            if (Math.abs(totalProfit) > 0.01) {
+                html += `<div class="total-gain ${totalClass}">
+                    <div class="total-gain-val">${totalSign}${totalProfit.toFixed(2)}</div>
+                    <div class="total-gain-label">今日预估总收益 (元)</div>
+                </div>`;
+            }
+
             html += `<div class="summary">
                 <div class="stat up"><div class="stat-val">${gains.length}</div><div class="stat-label">上涨</div></div>
                 <div class="stat down"><div class="stat-val">${losses.length}</div><div class="stat-label">下跌</div></div>
@@ -292,16 +355,29 @@
                 const changeClass = r.change > 0 ? 'up' : r.change < 0 ? 'down' : 'neu';
                 const changeSign = r.change > 0 ? '+' : '';
                 
-                const deleteBtn = isManageMode 
-                    ? `<div class="delete-btn" onclick="removeFund('${r.code}')" style="margin-left: 8px; color: #f85149; cursor: pointer; padding: 4px;">✕</div>` 
+                let actionBtn = '';
+                if (isManageMode) {
+                     actionBtn = `
+                        <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+                            <div class="share-edit" onclick="editShare('${r.code}')">持仓: ${r.share || 0}</div>
+                            <div class="delete-btn" onclick="removeFund('${r.code}')" style="color: #f85149; cursor: pointer; padding: 4px; font-size: 12px;">删除</div>
+                        </div>`;
+                }
+
+                const profitHtml = (r.share > 0) 
+                    ? `<div class="fund-gain ${r.profit > 0 ? 'up' : r.profit < 0 ? 'down' : ''}">${r.profit > 0 ? '+' : ''}${r.profit.toFixed(2)}</div>`
                     : '';
 
                 html += `<div class="card">
                     <div class="rank ${rankClass}">${i+1}</div>
-                    <div class="info"><div class="name">${r.name}</div><div class="code">${r.code}</div></div>
+                    <div class="info">
+                        <div class="name">${r.name}</div>
+                        <div class="code">${r.code}</div>
+                        ${profitHtml}
+                    </div>
                     <div class="nav">${r.nav.toFixed(3)}</div>
                     <div class="change ${changeClass}">${changeSign}${r.change.toFixed(2)}%</div>
-                    ${deleteBtn}
+                    ${actionBtn}
                 </div>`;
             });
             
