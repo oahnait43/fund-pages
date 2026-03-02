@@ -272,14 +272,57 @@
             }
         }
 
+        function copyToClipboard(text) {
+            // 1. Try modern clipboard API
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                return navigator.clipboard.writeText(text).catch(err => {
+                    console.error('Clipboard API failed:', err);
+                    return fallbackCopy(text);
+                });
+            } else {
+                return fallbackCopy(text);
+            }
+        }
+
+        function fallbackCopy(text) {
+            return new Promise((resolve, reject) => {
+                try {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = text;
+                    
+                    // Ensure element is not visible but part of DOM
+                    textArea.style.position = "fixed";
+                    textArea.style.left = "-9999px";
+                    textArea.style.top = "0";
+                    document.body.appendChild(textArea);
+                    
+                    textArea.focus();
+                    textArea.select();
+                    
+                    const successful = document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    
+                    if (successful) {
+                        resolve();
+                    } else {
+                        reject(new Error("execCommand failed"));
+                    }
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        }
+
         function exportConfig() {
             const configStr = JSON.stringify(FUNDS);
             const base64Config = btoa(encodeURIComponent(configStr));
-            // Copy to clipboard
-            navigator.clipboard.writeText(base64Config).then(() => {
+            
+            copyToClipboard(base64Config).then(() => {
                 alert('配置代码已复制到剪贴板！\n请保存好这段代码，在其他设备点击“导入配置”即可恢复。');
             }).catch(err => {
-                prompt('请复制以下配置代码：', base64Config);
+                console.error('Copy failed:', err);
+                // Last resort fallback: prompt user to copy manually
+                prompt('自动复制失败，请手动复制以下配置代码：', base64Config);
             });
         }
 
