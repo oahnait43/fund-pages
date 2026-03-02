@@ -141,9 +141,13 @@
     </div>
     
     <div id="add-fund-area" style="display: none; margin-bottom: 16px;">
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
             <input type="text" id="new-fund-code" placeholder="输入基金代码 (如 002910)" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9;">
             <button onclick="addFund()" style="padding: 8px 16px; border-radius: 6px; border: none; background: #238636; color: white; font-weight: 600; cursor: pointer;">添加</button>
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <button onclick="exportConfig()" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #58a6ff; cursor: pointer;">导出配置</button>
+            <button onclick="importConfig()" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #58a6ff; cursor: pointer;">导入配置</button>
         </div>
     </div>
     
@@ -265,6 +269,40 @@
                 } else {
                     alert('请输入有效的数字');
                 }
+            }
+        }
+
+        function exportConfig() {
+            const configStr = JSON.stringify(FUNDS);
+            const base64Config = btoa(encodeURIComponent(configStr));
+            // Copy to clipboard
+            navigator.clipboard.writeText(base64Config).then(() => {
+                alert('配置代码已复制到剪贴板！\n请保存好这段代码，在其他设备点击“导入配置”即可恢复。');
+            }).catch(err => {
+                prompt('请复制以下配置代码：', base64Config);
+            });
+        }
+
+        function importConfig() {
+            const base64Config = prompt('请粘贴配置代码：');
+            if (!base64Config) return;
+
+            try {
+                const configStr = decodeURIComponent(atob(base64Config));
+                const newFunds = JSON.parse(configStr);
+                
+                if (Array.isArray(newFunds)) {
+                    if (confirm(`检测到 ${newFunds.length} 个基金配置，确定要覆盖当前配置吗？`)) {
+                        FUNDS = newFunds;
+                        saveFunds();
+                        refreshData();
+                        alert('导入成功！');
+                    }
+                } else {
+                    alert('配置代码格式错误');
+                }
+            } catch (e) {
+                alert('无效的配置代码');
             }
         }
 
