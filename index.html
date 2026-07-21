@@ -44,9 +44,9 @@
         }
         .rank.up { background: #238636; color: white; }
         .rank.down { background: #da3633; color: white; }
-        .info { flex: 1; }
-        .name { font-size: 14px; font-weight: 500; }
-        .code { font-size: 11px; color: #8b949e; }
+        .info { flex: 1; min-width: 0; }
+        .name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+        .code { font-size: 11px; color: #8b949e; overflow-wrap: anywhere; }
         .nav { font-size: 16px; font-weight: 600; }
         .change {
             padding: 4px 8px;
@@ -143,7 +143,7 @@
     <div id="add-fund-area" style="display: none; margin-bottom: 16px;">
         <div style="display: flex; gap: 8px; margin-bottom: 8px;">
             <input type="text" id="new-fund-code" placeholder="输入基金代码 (如 002910)" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9;">
-            <button onclick="addFund()" style="padding: 8px 16px; border-radius: 6px; border: none; background: #238636; color: white; font-weight: 600; cursor: pointer;">添加</button>
+            <button onclick="addFund(event)" style="padding: 8px 16px; border-radius: 6px; border: none; background: #238636; color: white; font-weight: 600; cursor: pointer;">添加</button>
         </div>
         <div style="display: flex; gap: 8px;">
             <button onclick="exportConfig()" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #58a6ff; cursor: pointer;">导出配置</button>
@@ -158,12 +158,16 @@
     <div class="time" id="updateTime"></div>
     
     <script>
-        const API_BASE = 'https://fundgz.1234567.com.cn/js';
+        const API_ENDPOINTS = [
+            'https://fundcomapi.tiantianfunds.com/mm/newCore/FundValuationLast',
+            'https://fundcomapi.eastmoney.com/mm/newCore/FundValuationLast'
+        ];
+        const API_FIELDS = 'FCODE,SHORTNAME,GSZZL,GZTIME,GSZ,NAV,PDATE';
         
         const DEFAULT_FUNDS = [
             { code: '159361', name: '易方达中证A500ETF', share: 0 },
             { code: '470888', name: '汇添富香港优势精选A', share: 0 },
-            { code: '021268', name: '长城医药产业精选A', share: 0 },
+            { code: '021268', name: '安信180天持有债券C', share: 0 },
             { code: '510330', name: '华夏沪深300ETF', share: 0 },
             { code: '005827', name: '易方达蓝筹精选', share: 0 }
         ];
@@ -174,37 +178,58 @@
         
         let isManageMode = false;
 
-        const pendingRequests = {};
-        window.jsonpgz = function(data) {
-            const code = data.fundcode;
-            if (pendingRequests[code]) {
-                pendingRequests[code].resolve(data);
-                delete pendingRequests[code];
-            }
-        };
+        let isRefreshing = false;
         
-        function fetchFund(code) {
-            return new Promise((resolve, reject) => {
-                pendingRequests[code] = { resolve, reject };
-                const script = document.createElement('script');
-                script.src = `${API_BASE}/${code}.js?rt=${Date.now()}`;
-                script.onload = () => {
-                    script.remove();
-                };
-                script.onerror = () => {
-                    delete pendingRequests[code];
-                    script.remove();
-                    resolve(null);
-                };
-                document.body.appendChild(script);
+        function normalizeFundData(item) {
+            return {
+                fundcode: String(item.FCODE),
+                name: item.SHORTNAME,
+                gsz: item.GSZ,
+                gszzl: item.GSZZL,
+                dwjz: item.NAV,
+                gztime: item.GZTIME,
+                jzrq: item.PDATE
+            };
+        }
                 
-                setTimeout(() => {
-                    if (pendingRequests[code]) {
-                        delete pendingRequests[code];
-                        resolve(null);
+        async function fetchFunds(codes) {
+            let lastError;
+
+            for (const endpoint of API_ENDPOINTS) {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 8000);
+
+                try {
+                    const url = new URL(endpoint);
+                    url.searchParams.set('FCODES', codes.join(','));
+                    url.searchParams.set('FIELDS', API_FIELDS);
+                    url.searchParams.set('_', Date.now());
+
+                    const response = await fetch(url, {
+                        signal: controller.signal,
+                        cache: 'no-store'
+                    });
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
                     }
-                }, 3000);
-            });
+
+                    const payload = await response.json();
+                    if (!payload.success || !Array.isArray(payload.data)) {
+                        throw new Error(payload.firstError || '估值接口返回异常');
+                    }
+
+                    return new Map(payload.data.map(item => {
+                        const data = normalizeFundData(item);
+                        return [data.fundcode, data];
+                    }));
+                } catch (error) {
+                    lastError = error;
+                } finally {
+                    clearTimeout(timeout);
+                }
+            }
+
+            throw lastError || new Error('估值接口不可用');
         }
         
         function saveFunds() {
@@ -217,7 +242,7 @@
             refreshData(); 
         }
 
-        async function addFund() {
+        async function addFund(event) {
             const input = document.getElementById('new-fund-code');
             const code = input.value.trim();
             if (!code) return;
@@ -233,12 +258,21 @@
             btn.innerText = '查询中...';
             btn.disabled = true;
 
-            const data = await fetchFund(code);
+            let data = null;
+            let lookupFailed = false;
+            try {
+                data = (await fetchFunds([code])).get(code) || null;
+            } catch (error) {
+                lookupFailed = true;
+                console.error('Fund lookup failed:', error);
+            }
             if (data) {
                 FUNDS.push({ code: code, name: data.name, share: 0 });
                 saveFunds();
                 input.value = '';
                 refreshData();
+            } else if (lookupFailed) {
+                alert('数据查询失败，请稍后重试');
             } else {
                 alert('未找到该基金，请检查代码');
             }
@@ -350,6 +384,8 @@
         }
 
         async function refreshData() {
+            if (isRefreshing) return;
+
             const content = document.getElementById('content');
             if (FUNDS.length === 0) {
                 content.innerHTML = '<div class="loading">暂无关注基金，请点击右上角设置添加</div>';
@@ -357,38 +393,74 @@
                 return;
             }
             
+            isRefreshing = true;
+
             if (!content.querySelector('.card')) {
                 content.innerHTML = '<div class="loading">加载中...</div>';
             }
             
-            const promises = FUNDS.map(async fund => {
-                const data = await fetchFund(fund.code);
+            let dataByCode = new Map();
+            let requestFailed = false;
+            try {
+                dataByCode = await fetchFunds(FUNDS.map(fund => fund.code));
+            } catch (error) {
+                requestFailed = true;
+                console.error('Fund refresh failed:', error);
+            }
+
+            let namesChanged = false;
+            const results = FUNDS.map(fund => {
+                const data = dataByCode.get(fund.code);
                 if (data) {
-                    const nav = parseFloat(data.gsz || data.dwjz);
-                    const lastNav = parseFloat(data.dwjz || 0);
-                    const change = parseFloat(data.gszzl || 0);
-                    // Calculate estimated profit: (Est. NAV - Yesterday NAV) * Share
-                    // Or more simply: Yesterday NAV * Share * Change% / 100
-                    // Method 1 (Direct NAV diff): (nav - lastNav) * (fund.share || 0)
-                    // Method 2 (Percentage): (lastNav * (fund.share || 0)) * (change / 100)
-                    // Method 1 is more accurate to the displayed change amount per share
-                    const profit = (nav - lastNav) * (fund.share || 0);
+                    if (data.name && data.name !== fund.name) {
+                        fund.name = data.name;
+                        namesChanged = true;
+                    }
                     
-                    return { ...fund, nav, change, profit };
+                    const estimatedNav = data.gsz !== null && data.gsz !== undefined ? Number(data.gsz) : NaN;
+                    const estimatedChange = data.gszzl !== null && data.gszzl !== undefined ? Number(data.gszzl) : NaN;
+                    const lastNav = data.dwjz !== null && data.dwjz !== undefined ? Number(data.dwjz) : NaN;
+                    const hasEstimate = Number.isFinite(estimatedNav) && Number.isFinite(estimatedChange);
+                    const nav = hasEstimate ? estimatedNav : lastNav;
+                    const change = hasEstimate ? estimatedChange : null;
+                    const profit = hasEstimate && Number.isFinite(nav) && Number.isFinite(lastNav)
+                        ? (nav - lastNav) * (fund.share || 0)
+                        : null;
+
+                    return {
+                        ...fund,
+                        nav: Number.isFinite(nav) ? nav : null,
+                        change: Number.isFinite(change) ? change : null,
+                        profit,
+                        hasEstimate,
+                        navDate: data.jzrq,
+                        estimateTime: data.gztime,
+                        status: hasEstimate ? 'estimate' : 'official'
+                    };
                 }
-                return { ...fund, nav: 0, change: 0, profit: 0 }; 
+
+                return {
+                    ...fund,
+                    nav: null,
+                    change: null,
+                    profit: null,
+                    hasEstimate: false,
+                    status: requestFailed ? 'error' : 'missing'
+                };
             });
 
-            const results = await Promise.all(promises);
+            if (namesChanged) saveFunds();
             
-            results.sort((a, b) => b.change - a.change);
+            results.sort((a, b) => (b.change ?? -Infinity) - (a.change ?? -Infinity));
             
-            const gains = results.filter(r => r.change > 0);
-            const losses = results.filter(r => r.change < 0);
-            const totalProfit = results.reduce((sum, r) => sum + r.profit, 0);
+            const gains = results.filter(r => r.hasEstimate && r.change > 0);
+            const losses = results.filter(r => r.hasEstimate && r.change < 0);
+            const totalProfit = results.reduce((sum, r) => sum + (r.profit || 0), 0);
             
             const now = new Date();
-            document.getElementById('updateTime').innerHTML = `<span class="live"></span>最后更新: ${now.toLocaleTimeString()}`;
+            document.getElementById('updateTime').innerHTML = requestFailed
+                ? `数据更新失败 · ${now.toLocaleTimeString()}`
+                : `<span class="live"></span>数据更新: ${now.toLocaleTimeString()}`;
             
             let html = '';
             
@@ -429,9 +501,14 @@
             }
             
             results.forEach((r, i) => {
-                const rankClass = r.change > 0 ? 'up' : r.change < 0 ? 'down' : 'neu';
-                const changeClass = r.change > 0 ? 'up' : r.change < 0 ? 'down' : 'neu';
-                const changeSign = r.change > 0 ? '+' : '';
+                const rankClass = r.hasEstimate && r.change > 0 ? 'up' : r.hasEstimate && r.change < 0 ? 'down' : 'neu';
+                const changeClass = r.hasEstimate && r.change > 0 ? 'up' : r.hasEstimate && r.change < 0 ? 'down' : 'neu';
+                const changeSign = r.hasEstimate && r.change > 0 ? '+' : '';
+                const navText = r.nav !== null ? r.nav.toFixed(3) : '--';
+                const changeText = r.hasEstimate
+                    ? `${changeSign}${r.change.toFixed(2)}%`
+                    : r.status === 'official' ? '暂无估值' : r.status === 'error' ? '更新失败' : '暂无数据';
+                const dateText = r.status === 'official' && r.navDate ? ` · 净值 ${r.navDate}` : '';
                 
                 let actionBtn = '';
                 if (isManageMode) {
@@ -442,7 +519,7 @@
                         </div>`;
                 }
 
-                const profitHtml = (r.share > 0) 
+                const profitHtml = (r.share > 0 && r.hasEstimate)
                     ? `<div class="fund-gain ${r.profit > 0 ? 'up' : r.profit < 0 ? 'down' : ''}">${r.profit > 0 ? '+' : ''}${r.profit.toFixed(2)}</div>`
                     : '';
 
@@ -450,16 +527,17 @@
                     <div class="rank ${rankClass}">${i+1}</div>
                     <div class="info">
                         <div class="name">${r.name}</div>
-                        <div class="code">${r.code}</div>
+                        <div class="code">${r.code}${dateText}</div>
                         ${profitHtml}
                     </div>
-                    <div class="nav">${r.nav.toFixed(3)}</div>
-                    <div class="change ${changeClass}">${changeSign}${r.change.toFixed(2)}%</div>
+                    <div class="nav">${navText}</div>
+                    <div class="change ${changeClass}">${changeText}</div>
                     ${actionBtn}
                 </div>`;
             });
             
             content.innerHTML = html;
+            isRefreshing = false;
         }
         
         refreshData();
