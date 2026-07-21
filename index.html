@@ -47,6 +47,8 @@
         .info { flex: 1; min-width: 0; }
         .name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
         .code { font-size: 11px; color: #8b949e; overflow-wrap: anywhere; }
+        .estimate-meta { font-size: 10px; color: #8b949e; margin-top: 3px; line-height: 1.35; }
+        .estimate-meta .quality { color: #d29922; }
         .nav { font-size: 16px; font-weight: 600; }
         .change {
             padding: 4px 8px;
@@ -157,6 +159,7 @@
     
     <div class="time" id="updateTime"></div>
     
+    <script src="fund-estimator.js"></script>
     <script>
         const API_ENDPOINTS = [
             'https://fundcomapi.tiantianfunds.com/mm/newCore/FundValuationLast',
@@ -165,11 +168,20 @@
         const API_FIELDS = 'FCODE,SHORTNAME,GSZZL,GZTIME,GSZ,NAV,PDATE';
         
         const DEFAULT_FUNDS = [
-            { code: '159361', name: '易方达中证A500ETF', share: 0 },
-            { code: '470888', name: '汇添富香港优势精选A', share: 0 },
-            { code: '021268', name: '安信180天持有债券C', share: 0 },
-            { code: '510330', name: '华夏沪深300ETF', share: 0 },
-            { code: '005827', name: '易方达蓝筹精选', share: 0 }
+            { code: '021532', name: '天弘半导体设备指数A', share: 0 },
+            { code: '011035', name: '嘉实中证稀土产业ETF联接A', share: 0 },
+            { code: '017192', name: '天弘中证工业有色金属主题ETF发起联接A', share: 0 },
+            { code: '008705', name: '广发高股息优享混合C', share: 0 },
+            { code: '002910', name: '易方达供给改革混合', share: 0 },
+            { code: '012447', name: '华夏互联网龙头混合A', share: 0 },
+            { code: '110023', name: '易方达医疗保健行业混合A', share: 0 },
+            { code: '005609', name: '富国军工主题混合A', share: 0 },
+            { code: '000251', name: '工银金融地产混合A', share: 0 },
+            { code: '009265', name: '易方达消费精选股票', share: 0 },
+            { code: '001856', name: '易方达环保主题混合A', share: 0 },
+            { code: '007099', name: '安信尊享添益债券C', share: 0 },
+            { code: '012920', name: '易方达全球成长精选混合(QDII)人民币A', share: 0 },
+            { code: '025209', name: '永赢先锋半导体智选混合发起C', share: 0 }
         ];
 
         let FUNDS = JSON.parse(localStorage.getItem('my_funds')) || DEFAULT_FUNDS;
@@ -179,6 +191,18 @@
         let isManageMode = false;
 
         let isRefreshing = false;
+
+        function finiteNumber(value) {
+            if (value === null || value === undefined || value === '') return null;
+            const number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        }
+
+        function trendDirection(value) {
+            if (!Number.isFinite(value)) return 0;
+            const displayedValue = Math.round(value * 100) / 100;
+            return displayedValue > 0 ? 1 : displayedValue < 0 ? -1 : 0;
+        }
         
         function normalizeFundData(item) {
             return {
@@ -408,6 +432,28 @@
                 console.error('Fund refresh failed:', error);
             }
 
+            let holdingEstimates = new Map();
+            let unsupportedEstimates = new Map();
+            let failedEstimates = new Map();
+            let estimationFailed = false;
+            if (!requestFailed && window.FundEstimator) {
+                const missingFunds = FUNDS.filter(fund => {
+                    const data = dataByCode.get(fund.code);
+                    const directNav = finiteNumber(data?.gsz);
+                    const directChange = finiteNumber(data?.gszzl);
+                    return data && (directNav === null || directChange === null);
+                });
+                try {
+                    const estimation = await window.FundEstimator.estimate(missingFunds, dataByCode);
+                    holdingEstimates = estimation.estimates;
+                    unsupportedEstimates = estimation.unsupported;
+                    failedEstimates = estimation.failed;
+                } catch (error) {
+                    estimationFailed = true;
+                    console.error('Holding estimate failed:', error);
+                }
+            }
+
             let namesChanged = false;
             const results = FUNDS.map(fund => {
                 const data = dataByCode.get(fund.code);
@@ -420,9 +466,12 @@
                     const estimatedNav = data.gsz !== null && data.gsz !== undefined ? Number(data.gsz) : NaN;
                     const estimatedChange = data.gszzl !== null && data.gszzl !== undefined ? Number(data.gszzl) : NaN;
                     const lastNav = data.dwjz !== null && data.dwjz !== undefined ? Number(data.dwjz) : NaN;
-                    const hasEstimate = Number.isFinite(estimatedNav) && Number.isFinite(estimatedChange);
-                    const nav = hasEstimate ? estimatedNav : lastNav;
-                    const change = hasEstimate ? estimatedChange : null;
+                    const hasDirectEstimate = Number.isFinite(estimatedNav) && Number.isFinite(estimatedChange);
+                    const holdingEstimate = hasDirectEstimate ? null : holdingEstimates.get(fund.code);
+                    const hasHoldingEstimate = Boolean(holdingEstimate);
+                    const hasEstimate = hasDirectEstimate || hasHoldingEstimate;
+                    const nav = hasDirectEstimate ? estimatedNav : hasHoldingEstimate ? holdingEstimate.nav : lastNav;
+                    const change = hasDirectEstimate ? estimatedChange : hasHoldingEstimate ? holdingEstimate.change : null;
                     const profit = hasEstimate && Number.isFinite(nav) && Number.isFinite(lastNav)
                         ? (nav - lastNav) * (fund.share || 0)
                         : null;
@@ -434,8 +483,11 @@
                         profit,
                         hasEstimate,
                         navDate: data.jzrq,
-                        estimateTime: data.gztime,
-                        status: hasEstimate ? 'estimate' : 'official'
+                        estimateTime: hasDirectEstimate ? data.gztime : holdingEstimate?.estimateTime,
+                        estimateSource: hasDirectEstimate ? 'direct' : hasHoldingEstimate ? 'holding' : null,
+                        estimateDetails: holdingEstimate || null,
+                        unavailableReason: unsupportedEstimates.get(fund.code) || failedEstimates.get(fund.code) || null,
+                        status: hasDirectEstimate ? 'estimate' : hasHoldingEstimate ? 'holding' : 'official'
                     };
                 }
 
@@ -453,9 +505,10 @@
             
             results.sort((a, b) => (b.change ?? -Infinity) - (a.change ?? -Infinity));
             
-            const gains = results.filter(r => r.hasEstimate && r.change > 0);
-            const losses = results.filter(r => r.hasEstimate && r.change < 0);
+            const gains = results.filter(r => r.hasEstimate && trendDirection(r.change) > 0);
+            const losses = results.filter(r => r.hasEstimate && trendDirection(r.change) < 0);
             const totalProfit = results.reduce((sum, r) => sum + (r.profit || 0), 0);
+            const hasHoldingReference = results.some(r => r.estimateSource === 'holding');
             
             const now = new Date();
             document.getElementById('updateTime').innerHTML = requestFailed
@@ -470,7 +523,7 @@
             if (Math.abs(totalProfit) > 0.01) {
                 html += `<div class="total-gain ${totalClass}">
                     <div class="total-gain-val">${totalSign}${totalProfit.toFixed(2)}</div>
-                    <div class="total-gain-label">今日预估总收益 (元)</div>
+                    <div class="total-gain-label">今日${hasHoldingReference ? '参考' : '预估'}总收益 (元)</div>
                 </div>`;
             }
 
@@ -501,14 +554,31 @@
             }
             
             results.forEach((r, i) => {
-                const rankClass = r.hasEstimate && r.change > 0 ? 'up' : r.hasEstimate && r.change < 0 ? 'down' : 'neu';
-                const changeClass = r.hasEstimate && r.change > 0 ? 'up' : r.hasEstimate && r.change < 0 ? 'down' : 'neu';
-                const changeSign = r.hasEstimate && r.change > 0 ? '+' : '';
+                const direction = r.hasEstimate ? trendDirection(r.change) : 0;
+                const rankClass = direction > 0 ? 'up' : direction < 0 ? 'down' : 'neu';
+                const changeClass = direction > 0 ? 'up' : direction < 0 ? 'down' : 'neu';
+                const changeSign = direction > 0 ? '+' : '';
                 const navText = r.nav !== null ? r.nav.toFixed(3) : '--';
                 const changeText = r.hasEstimate
-                    ? `${changeSign}${r.change.toFixed(2)}%`
+                    ? `${r.estimateSource === 'holding' ? '参考 ' : ''}${changeSign}${r.change.toFixed(2)}%`
                     : r.status === 'official' ? '暂无估值' : r.status === 'error' ? '更新失败' : '暂无数据';
                 const dateText = r.status === 'official' && r.navDate ? ` · 净值 ${r.navDate}` : '';
+                let estimateMeta = '';
+                if (r.estimateSource === 'holding') {
+                    const details = r.estimateDetails;
+                    const calibration = details.calibration;
+                    const errorText = calibration.samples > 0 && calibration.mae !== null
+                        ? ` · 校准${calibration.samples}次 · 近期误差 ±${calibration.mae.toFixed(2)}%`
+                        : ' · 待净值更新后校验';
+                    const lastErrorText = details.lastCheck
+                        ? ` · 上次误差 ${details.lastCheck.error >= 0 ? '+' : ''}${details.lastCheck.error.toFixed(2)}%`
+                        : '';
+                    estimateMeta = `<div class="estimate-meta"><span class="quality">持仓覆盖 ${details.coverage.toFixed(0)}% · ${details.confidence}信心</span>${errorText}${lastErrorText}</div>`;
+                } else if (!r.hasEstimate && r.unavailableReason) {
+                    estimateMeta = `<div class="estimate-meta">${r.unavailableReason}</div>`;
+                } else if (!r.hasEstimate && estimationFailed && window.FundEstimator?.supportedCodes.has(r.code)) {
+                    estimateMeta = '<div class="estimate-meta">持仓参考暂时不可用</div>';
+                }
                 
                 let actionBtn = '';
                 if (isManageMode) {
@@ -528,6 +598,7 @@
                     <div class="info">
                         <div class="name">${r.name}</div>
                         <div class="code">${r.code}${dateText}</div>
+                        ${estimateMeta}
                         ${profitHtml}
                     </div>
                     <div class="nav">${navText}</div>
